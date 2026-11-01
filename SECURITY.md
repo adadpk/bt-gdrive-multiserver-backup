@@ -13,7 +13,7 @@ Do not attach, commit, paste, or upload any of the following from a live server:
 - raw backup archives or database dumps
 - full panel logs that may contain access tokens or private URLs
 
-The built-in `diagnose.sh` intentionally redacts the configured Google Drive Folder ID and does not print token files.
+The built-in `diagnose.sh` intentionally redacts the configured Google Drive Folder ID **and the public IPv4 value**, and does not print token files.
 
 ## Reporting a vulnerability
 
