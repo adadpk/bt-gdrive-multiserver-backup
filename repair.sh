@@ -52,7 +52,6 @@ from pathlib import Path
 import re, sys
 p=Path(sys.argv[1]); text=p.read_text(encoding='utf-8')
 orig=text
-
 pat = r'(    __config_path = os\.path\.join\(__setup_path,\s*[\'\"]config\.conf[\'\"]\)\n)(?:    # BT-GDRIVE-MULTISERVER-BEGIN.*?    # BT-GDRIVE-MULTISERVER-END\n)?(?:    __backup_dir_name = [\'\"](?:bt_backup|BT-Backup)[\'\"]\n)?'
 rep = r'''\1    # BT-GDRIVE-MULTISERVER-BEGIN
     __backup_dir_name = "BT-Backup"
@@ -62,10 +61,8 @@ rep = r'''\1    # BT-GDRIVE-MULTISERVER-BEGIN
 '''
 text,n = re.subn(pat,rep,text,count=1,flags=re.S)
 if n != 1: raise SystemExit('Unsupported gdrive_main.py: class config anchor not found')
-
 start=text.find('    def _create_folder_cycle(self,filepath):')
-if start < 0:
-    start=text.find('    def _read_simple_conf(self, path):')
+if start < 0: start=text.find('    def _read_simple_conf(self, path):')
 if start < 0: raise SystemExit('Unsupported gdrive_main.py: folder helper anchor not found')
 end=text.find('    def upload_file(', start)
 if end < 0: raise SystemExit('Unsupported gdrive_main.py: upload_file anchor not found')
@@ -142,7 +139,6 @@ new='''    # BT-GDRIVE-MULTISERVER-BEGIN helpers
 
 '''
 text=text[:start]+new+text[end:]
-
 pat2=re.compile(r'(?ms)^    # 获取目录id.*?^    def create_folder\(self,folder_name,parents=""\):')
 if pat2.search(text):
     repl='''    # 获取目录id（按父目录限定，避免同名目录串线）
@@ -163,11 +159,9 @@ if pat2.search(text):
     text=pat2.sub(repl,text,count=1)
 elif 'def __get_folder_id(self, folder_name, parent_id=None):' not in text:
     raise SystemExit('Unsupported gdrive_main.py: folder lookup function not found')
-
 text=text.replace("get.filepath = 'bt_backup/sites/' + name", "get.filepath = self._remote_path('web', name)")
 text=text.replace("get.filepath = 'bt_backup/database/' + name", "get.filepath = self._remote_path('db', name)")
 text=text.replace("get.filepath = 'bt_backup/path/' + name", "get.filepath = self._remote_path('path', name)")
-
 if text == orig: raise SystemExit('No changes made to gdrive_main.py')
 p.write_text(text,encoding='utf-8')
 print('Patched gdrive_main.py')
@@ -235,5 +229,5 @@ PY
 trap - ERR
 
 echo "Repair completed successfully."
-if [ -n "${ROOT_FOLDER_ID:-}" ]; then echo "Folder ID configured: ${ROOT_FOLDER_ID:0:6}...${ROOT_FOLDER_ID: -4}"; else echo "Bootstrap mode: BT-Backup will be created by the plugin on first backup."; fi
+if [ -n "${ROOT_FOLDER_ID:-}" ]; then echo "Folder ID configured: yes (redacted)"; else echo "Bootstrap mode: BT-Backup will be created by the plugin on first backup."; fi
 echo "Log: $LOG_FILE"
