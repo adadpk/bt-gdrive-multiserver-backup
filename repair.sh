@@ -22,6 +22,9 @@ rollback(){
   echo "[WARN] Error detected; restoring files from this run..."
   [ -f "$BACKUP_DIR/gdrive_main.py" ] && cp -a "$BACKUP_DIR/gdrive_main.py" "$GDRIVE_FILE" || true
   [ -f "$BACKUP_DIR/CloudStoraUpload.py" ] && cp -a "$BACKUP_DIR/CloudStoraUpload.py" "$CLOUD_FILE" || true
+  [ -f "$BACKUP_DIR/root_folder_id.conf" ] && cp -a "$BACKUP_DIR/root_folder_id.conf" "$PLUGIN_DIR/root_folder_id.conf" || true
+  [ -f "$BACKUP_DIR/server_name.conf" ] && cp -a "$BACKUP_DIR/server_name.conf" "$PLUGIN_DIR/server_name.conf" || true
+  [ -f "$BACKUP_DIR/server_id_mode.conf" ] && cp -a "$BACKUP_DIR/server_id_mode.conf" "$PLUGIN_DIR/server_id_mode.conf" || true
   echo "Rollback finished. Log: $LOG_FILE"
 }
 trap rollback ERR
@@ -30,8 +33,16 @@ trap rollback ERR
 # shellcheck disable=SC1090
 source "$CONFIG_FILE"
 BOOTSTRAP="${BOOTSTRAP:-0}"
-if [ -z "${ROOT_FOLDER_ID:-}" ] && [ "$BOOTSTRAP" != "1" ]; then fail "ROOT_FOLDER_ID is required (or use bootstrap mode)"; fi
-FALLBACK_SERVER_NAME="${FALLBACK_SERVER_NAME:-}"
+ROOT_FOLDER_ID="${ROOT_FOLDER_ID:-}"
+SERVER_ID_MODE="${SERVER_ID_MODE:-ip}"
+SERVER_NAME="${SERVER_NAME:-${FALLBACK_SERVER_NAME:-}}"
+
+case "$SERVER_ID_MODE" in
+  ip|name|hostname) ;;
+  *) fail "Invalid SERVER_ID_MODE: $SERVER_ID_MODE" ;;
+esac
+[ "$SERVER_ID_MODE" != "name" ] || [ -n "$SERVER_NAME" ] || fail "name mode requires SERVER_NAME"
+if [ -z "$ROOT_FOLDER_ID" ] && [ "$BOOTSTRAP" != "1" ]; then fail "ROOT_FOLDER_ID is required (or use bootstrap mode)"; fi
 
 [ -f "$GDRIVE_FILE" ] || fail "Google Drive plugin file not found: $GDRIVE_FILE"
 [ -f "$CLOUD_FILE" ] || fail "Cloud storage core file not found: $CLOUD_FILE"
@@ -40,32 +51,38 @@ if [ ! -x "$PYTHON" ]; then PYTHON="$(command -v python3 || true)"; fi
 
 cp -a "$GDRIVE_FILE" "$BACKUP_DIR/gdrive_main.py"
 cp -a "$CLOUD_FILE" "$BACKUP_DIR/CloudStoraUpload.py"
-[ -f "$PLUGIN_DIR/root_folder_id.conf" ] && cp -a "$PLUGIN_DIR/root_folder_id.conf" "$BACKUP_DIR/root_folder_id.conf" || true
-[ -f "$PLUGIN_DIR/server_name.conf" ] && cp -a "$PLUGIN_DIR/server_name.conf" "$BACKUP_DIR/server_name.conf" || true
+for f in root_folder_id.conf server_name.conf server_id_mode.conf; do
+  [ -f "$PLUGIN_DIR/$f" ] && cp -a "$PLUGIN_DIR/$f" "$BACKUP_DIR/$f" || true
+done
 
 echo "[$TOOL_NAME] Repair started"
 echo "Backup: $BACKUP_DIR"
-echo "Server ID: public IPv4 (fallback: server_name.conf / hostname)"
+echo "Server ID mode: $SERVER_ID_MODE"
 
 "$PYTHON" - "$GDRIVE_FILE" <<'PY'
 from pathlib import Path
 import re, sys
 p=Path(sys.argv[1]); text=p.read_text(encoding='utf-8')
 orig=text
+
 pat = r'(    __config_path = os\.path\.join\(__setup_path,\s*[\'\"]config\.conf[\'\"]\)\n)(?:    # BT-GDRIVE-MULTISERVER-BEGIN.*?    # BT-GDRIVE-MULTISERVER-END\n)?(?:    __backup_dir_name = [\'\"](?:bt_backup|BT-Backup)[\'\"]\n)?'
 rep = r'''\1    # BT-GDRIVE-MULTISERVER-BEGIN
     __backup_dir_name = "BT-Backup"
     __root_folder_id_path = os.path.join(__setup_path, 'root_folder_id.conf')
     __server_name_path = os.path.join(__setup_path, 'server_name.conf')
+    __server_id_mode_path = os.path.join(__setup_path, 'server_id_mode.conf')
     # BT-GDRIVE-MULTISERVER-END
 '''
 text,n = re.subn(pat,rep,text,count=1,flags=re.S)
 if n != 1: raise SystemExit('Unsupported gdrive_main.py: class config anchor not found')
-start=text.find('    def _create_folder_cycle(self,filepath):')
+
+start=text.find('    # BT-GDRIVE-MULTISERVER-BEGIN helpers')
+if start < 0: start=text.find('    def _create_folder_cycle(self,filepath):')
 if start < 0: start=text.find('    def _read_simple_conf(self, path):')
 if start < 0: raise SystemExit('Unsupported gdrive_main.py: folder helper anchor not found')
 end=text.find('    def upload_file(', start)
 if end < 0: raise SystemExit('Unsupported gdrive_main.py: upload_file anchor not found')
+
 new='''    # BT-GDRIVE-MULTISERVER-BEGIN helpers
     def _read_simple_conf(self, path):
         try:
@@ -78,28 +95,39 @@ new='''    # BT-GDRIVE-MULTISERVER-BEGIN helpers
     def _get_root_folder_id(self):
         return self._read_simple_conf(self.__root_folder_id_path)
 
+    def _sanitize_server_id(self, value):
+        value = re.sub(r'[\\\\/\\r\\n\\t]+', '_', str(value or '').strip())
+        return value or 'server'
+
+    def _public_ipv4(self):
+        try:
+            import urllib.request
+            req = urllib.request.Request('https://api4.ipify.org', headers={'User-Agent':'bt-gdrive-multiserver'})
+            value = urllib.request.urlopen(req, timeout=3).read().decode().strip()
+            return value if re.match(r'^\\d{1,3}(?:\\.\\d{1,3}){3}$', value) else ''
+        except Exception:
+            return ''
+
+    def _hostname(self):
+        try:
+            import socket
+            return socket.gethostname()
+        except Exception:
+            return 'server'
+
     def _get_server_name(self):
         cached = getattr(self, '_gdrive_server_id_cache', None)
         if cached: return cached
-        mode = os.environ.get('BT_GDRIVE_SERVER_ID_MODE', 'public-ip').strip().lower()
-        name = ""
-        if mode == 'public-ip':
-            try:
-                import urllib.request
-                req=urllib.request.Request('https://api4.ipify.org',headers={'User-Agent':'bt-gdrive-multiserver'})
-                name=urllib.request.urlopen(req,timeout=3).read().decode().strip()
-                if not re.match(r'^\\d{1,3}(?:\\.\\d{1,3}){3}$', name): name=""
-            except Exception:
-                name=""
-        if not name:
-            name=self._read_simple_conf(self.__server_name_path)
-        if not name:
-            try:
-                import socket; name=socket.gethostname()
-            except Exception:
-                name='server'
-        name=re.sub(r'[\\\\/\\r\\n\\t]+','_',str(name).strip()) or 'server'
-        self._gdrive_server_id_cache=name
+        mode = (self._read_simple_conf(self.__server_id_mode_path) or 'ip').lower()
+        configured = self._read_simple_conf(self.__server_name_path)
+        if mode == 'name':
+            name = configured or self._hostname()
+        elif mode == 'hostname':
+            name = self._hostname()
+        else:
+            name = self._public_ipv4() or configured or self._hostname()
+        name = self._sanitize_server_id(name)
+        self._gdrive_server_id_cache = name
         return name
 
     def _get_remote_base(self):
@@ -139,6 +167,7 @@ new='''    # BT-GDRIVE-MULTISERVER-BEGIN helpers
 
 '''
 text=text[:start]+new+text[end:]
+
 pat2=re.compile(r'(?ms)^    # 获取目录id.*?^    def create_folder\(self,folder_name,parents=""\):')
 if pat2.search(text):
     repl='''    # 获取目录id（按父目录限定，避免同名目录串线）
@@ -159,26 +188,25 @@ if pat2.search(text):
     text=pat2.sub(repl,text,count=1)
 elif 'def __get_folder_id(self, folder_name, parent_id=None):' not in text:
     raise SystemExit('Unsupported gdrive_main.py: folder lookup function not found')
+
 text=text.replace("get.filepath = 'bt_backup/sites/' + name", "get.filepath = self._remote_path('web', name)")
 text=text.replace("get.filepath = 'bt_backup/database/' + name", "get.filepath = self._remote_path('db', name)")
 text=text.replace("get.filepath = 'bt_backup/path/' + name", "get.filepath = self._remote_path('path', name)")
+
 if text == orig: raise SystemExit('No changes made to gdrive_main.py')
 p.write_text(text,encoding='utf-8')
 print('Patched gdrive_main.py')
 PY
 
-if [ -n "${ROOT_FOLDER_ID:-}" ]; then
+if [ -n "$ROOT_FOLDER_ID" ]; then
   printf '%s\n' "$ROOT_FOLDER_ID" > "$PLUGIN_DIR/root_folder_id.conf"
   chmod 600 "$PLUGIN_DIR/root_folder_id.conf"
 else
   rm -f "$PLUGIN_DIR/root_folder_id.conf"
 fi
-if [ -n "$FALLBACK_SERVER_NAME" ]; then
-  printf '%s\n' "$FALLBACK_SERVER_NAME" > "$PLUGIN_DIR/server_name.conf"
-else
-  : > "$PLUGIN_DIR/server_name.conf"
-fi
-chmod 600 "$PLUGIN_DIR/server_name.conf"
+printf '%s\n' "$SERVER_NAME" > "$PLUGIN_DIR/server_name.conf"
+printf '%s\n' "$SERVER_ID_MODE" > "$PLUGIN_DIR/server_id_mode.conf"
+chmod 600 "$PLUGIN_DIR/server_name.conf" "$PLUGIN_DIR/server_id_mode.conf"
 
 "$PYTHON" - "$CLOUD_FILE" <<'PY'
 from pathlib import Path
@@ -194,23 +222,40 @@ new='''    def build_object_name(self, data_type, file_name):
         import re
         prefix_dict={"site":"web","database":"db","path":"path"}
         data_prefix=prefix_dict.get(data_type,"other")
-        server_name=""
-        try:
-            import urllib.request
-            req=urllib.request.Request('https://api4.ipify.org',headers={'User-Agent':'bt-gdrive-multiserver'})
-            server_name=urllib.request.urlopen(req,timeout=3).read().decode().strip()
-            if not re.match(r'^\\d{1,3}(?:\\.\\d{1,3}){3}$',server_name): server_name=""
-        except Exception: server_name=""
-        if not server_name:
+
+        def read_conf(path):
             try:
-                with open('/www/server/panel/plugin/gdrive/server_name.conf','r') as f: server_name=f.read().strip()
-            except Exception: pass
-        if not server_name:
+                with open(path,'r') as f: return f.read().strip()
+            except Exception:
+                return ''
+
+        def hostname():
             try:
-                import socket; server_name=socket.gethostname()
-            except Exception: server_name='server'
+                import socket; return socket.gethostname()
+            except Exception:
+                return 'server'
+
+        def public_ip():
+            try:
+                import urllib.request
+                req=urllib.request.Request('https://api4.ipify.org',headers={'User-Agent':'bt-gdrive-multiserver'})
+                value=urllib.request.urlopen(req,timeout=3).read().decode().strip()
+                return value if re.match(r'^\\d{1,3}(?:\\.\\d{1,3}){3}$',value) else ''
+            except Exception:
+                return ''
+
+        base='/www/server/panel/plugin/gdrive/'
+        mode=(read_conf(base+'server_id_mode.conf') or 'ip').lower()
+        configured=read_conf(base+'server_name.conf')
+        if mode == 'name':
+            server_name=configured or hostname()
+        elif mode == 'hostname':
+            server_name=hostname()
+        else:
+            server_name=public_ip() or configured or hostname()
         server_name=re.sub(r'[\\\\/\\r\\n\\t]+','_',str(server_name).strip()) or 'server'
-        has_shared_root=os.path.isfile('/www/server/panel/plugin/gdrive/root_folder_id.conf') and bool(open('/www/server/panel/plugin/gdrive/root_folder_id.conf').read().strip())
+
+        has_shared_root=bool(read_conf(base+'root_folder_id.conf'))
         remote_root=server_name if has_shared_root else 'BT-Backup/'+server_name
         if "database" in file_name:
             dir_path='/'.join(file_name.split('/')[:-1]); sub_path_name='/'.join(dir_path.split('/')[-2:])+'/'
@@ -229,5 +274,6 @@ PY
 trap - ERR
 
 echo "Repair completed successfully."
-if [ -n "${ROOT_FOLDER_ID:-}" ]; then echo "Folder ID configured: yes (redacted)"; else echo "Bootstrap mode: BT-Backup will be created by the plugin on first backup."; fi
+echo "Folder ID configured: $([ -n "$ROOT_FOLDER_ID" ] && echo 'yes (redacted)' || echo 'bootstrap mode')"
+echo "Server ID mode: $SERVER_ID_MODE"
 echo "Log: $LOG_FILE"
