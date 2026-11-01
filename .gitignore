@@ -1,0 +1,23 @@
+# Credentials / tokens / user configuration
+credentials.json
+config.conf
+token.json
+gdrive_token.json
+.env
+config.env
+*.token
+
+# Runtime state
+logs/
+backups/
+legacy/
+*.log
+*diagnostic*.txt
+
+# OS/editor
+.DS_Store
+__MACOSX/
+__pycache__/
+*.pyc
+.vscode/
+.idea/
