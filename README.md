@@ -1,8 +1,12 @@
-# bt-gdrive-multiserver-backup
+# 宝塔 / aaPanel Google Drive 多服务器统一备份目录补丁
 
-Unofficial multi-server path patch for the **BT Panel / aaPanel Google Drive backup plugin 2.5**.
+[English](README.en.md) | 中文
 
-It fixes a practical problem when several servers back up into the same Google Drive account: the stock plugin can create or reuse generic `bt_backup` folders and may resolve same-named folders without constraining the parent folder. This project changes the layout to:
+这是一个针对 **宝塔 / aaPanel「谷歌云网盘 2.5」插件**的非官方多服务器备份目录补丁。
+
+适用场景：你有多台服务器，都把网站、数据库或目录备份到同一个 Google Drive 账号，但原插件容易出现多个 `bt_backup`、同名目录混乱，甚至不同服务器之间目录难以区分。
+
+这个项目把备份目录统一成：
 
 ```text
 BT-Backup/
@@ -17,176 +21,191 @@ BT-Backup/
 └── ...
 ```
 
-The server subfolder defaults to the current public IPv4 address. If public-IP detection fails, an optional fallback name and then the hostname are used.
+默认使用每台服务器当前的 **公网 IPv4** 作为子目录名；如果公网 IP 获取失败，可以回退到安装时指定的名称，再回退到主机名。
 
-> This is an **unofficial community patch**. It is not affiliated with, endorsed by, or distributed by BT.cn, aaPanel, Google, or Google Drive.
+> 本项目是社区非官方补丁，与宝塔、aaPanel、Google、Google Drive 无隶属或官方合作关系。
 
-## What this project changes
+## 解决什么问题
 
-The patch modifies two files already present on the server:
+原版多服务器共用同一个 Google Drive 时，常见问题包括：
+
+- Drive 根目录出现多个 `bt_backup`；
+- 不同服务器的备份目录混在一起；
+- 同名 `sites / database / path` 或其他目录容易混淆；
+- 插件升级或宝塔升级后，自定义修改可能被覆盖；
+- 后续排查时很难判断到底是插件层还是宝塔核心层在生成路径。
+
+本项目会：
+
+- 多台服务器共用一个 `BT-Backup` 总目录；
+- 每台服务器自动按公网 IP 分目录；
+- 保留 `web / db / path` 分类；
+- 修复 Google Drive 文件夹查找时只按名字匹配、未限定父目录的问题；
+- 每次修补前自动备份原文件；
+- 宝塔/插件升级后提供一键恢复；
+- 提供脱敏诊断脚本，方便升级后快速定位；
+- 代码结构不匹配时停止并回滚，避免硬改新版文件。
+
+## 兼容性
+
+当前按以下环境设计并验证：
+
+- 宝塔 / aaPanel 谷歌云网盘插件 **2.5**；
+- Linux；
+- 默认面板路径 `/www/server/panel/`。
+
+未来宝塔或插件升级后代码结构可能变化。如果脚本提示不兼容，请不要强行替换，建议先运行诊断脚本并提交 Issue。
+
+详细见 [COMPATIBILITY.md](COMPATIBILITY.md)。
+
+## 推荐安装方式
+
+### 第一台服务器：让插件自己创建 BT-Backup
+
+这是最稳的方式。因为 Google Drive 插件常使用 `drive.file` 授权范围，网页手工创建的文件夹不一定能被插件访问。
+
+先克隆仓库：
+
+```bash
+git clone https://github.com/adadpk/bt-gdrive-multiserver-backup.git
+cd bt-gdrive-multiserver-backup
+```
+
+第一台执行：
+
+```bash
+sudo bash install.sh --bootstrap
+```
+
+然后去宝塔：
+
+```text
+计划任务 → 找一个较小的网站/数据库备份 → 手动执行
+```
+
+正常会在 Google Drive 自动出现：
+
+```text
+BT-Backup/<当前服务器公网IP>/...
+```
+
+进入 `BT-Backup`，从浏览器地址栏复制 Folder ID：
+
+```text
+https://drive.google.com/drive/folders/FOLDER_ID
+```
+
+再执行：
+
+```bash
+sudo bash /root/bt_gdrive_tool/configure-root.sh FOLDER_ID
+```
+
+### 其他服务器
+
+这些服务器先安装并授权同一个 Google Drive 账号，然后执行：
+
+```bash
+git clone https://github.com/adadpk/bt-gdrive-multiserver-backup.git
+cd bt-gdrive-multiserver-backup
+sudo bash install.sh FOLDER_ID
+```
+
+所有服务器使用相同的 Folder ID，但会自动进入各自的公网 IP 目录。
+
+## 升级后失效怎么办
+
+宝塔升级可能覆盖：
+
+```text
+/www/server/panel/class/CloudStoraUpload.py
+```
+
+Google Drive 插件升级、修复或重装可能覆盖：
+
+```text
+/www/server/panel/plugin/gdrive/gdrive_main.py
+```
+
+升级后如果目录恢复成 `bt_backup`，直接执行：
+
+```bash
+sudo bash /root/bt_gdrive_tool/repair.sh
+```
+
+不需要重新输入 Folder ID。
+
+## 诊断
+
+如果升级后修复失败，执行：
+
+```bash
+sudo bash /root/bt_gdrive_tool/diagnose.sh
+```
+
+诊断脚本不会读取或输出：
+
+- `credentials.json` 内容；
+- OAuth access token；
+- refresh token；
+- Google Client Secret；
+- 网站或数据库备份内容；
+- Folder ID 明文。
+
+提交 Issue 时建议只上传诊断 TXT。
+
+## 回滚
+
+每次修复前都会保存原文件：
+
+```text
+/root/bt_gdrive_tool/backups/
+```
+
+恢复最近一次修复前的版本：
+
+```bash
+sudo bash /root/bt_gdrive_tool/uninstall.sh
+```
+
+这只恢复被修改的两个 Python 文件，不会卸载官方 Google Drive 插件。
+
+## 项目会修改哪些文件
+
+只修改服务器上现有的：
 
 ```text
 /www/server/panel/plugin/gdrive/gdrive_main.py
 /www/server/panel/class/CloudStoraUpload.py
 ```
 
-It does **not** ship the vendor's plugin source code, credentials, OAuth tokens, or Google Drive secrets.
+仓库本身不会发布宝塔官方插件源码副本，也不会包含你的 Google Drive 授权信息。
 
-Main changes:
+## 安全提醒
 
-- use one shared Google Drive root folder;
-- create a separate subfolder per server;
-- use public IPv4 as the default server identifier;
-- make Google Drive folder lookup parent-aware to avoid same-name folder collisions;
-- preserve `web`, `db`, and `path` subdirectories;
-- back up modified files before every repair;
-- stop and roll back when the expected code structure is not found;
-- include a redacted diagnostic script for upgrade troubleshooting.
-
-## Compatibility
-
-Verified design target:
-
-- BT Panel / aaPanel Google Drive plugin **2.5**
-- Linux panel installations using the default paths under `/www/server/panel/`
-
-A future panel/plugin update may change the Python structure. In that case the repair script is designed to stop instead of blindly replacing unrelated code.
-
-## Recommended setup
-
-### A. First server: let the plugin create `BT-Backup`
-
-This is the safest route when the Google Drive plugin uses the `drive.file` OAuth scope, because a folder manually created in the Drive web UI may not always be visible to the app.
-
-Clone/download this repository, then run:
-
-```bash
-sudo bash install.sh --bootstrap
-```
-
-Run **one small backup** from BT Panel. A new folder should appear:
-
-```text
-BT-Backup/<this-server-public-ip>/...
-```
-
-Open `BT-Backup` in Google Drive and copy the folder ID from the URL:
-
-```text
-https://drive.google.com/drive/folders/FOLDER_ID_HERE
-```
-
-Then configure that shared root on the first server:
-
-```bash
-sudo bash /root/bt_gdrive_tool/configure-root.sh FOLDER_ID_HERE
-```
-
-### B. Additional servers
-
-Authorize the Google Drive 2.5 plugin with the **same Google account**, then run:
-
-```bash
-sudo bash install.sh FOLDER_ID_HERE
-```
-
-Every server uses the same root folder ID, while its backup files go under its own public-IP subfolder.
-
-## One-command repair after an upgrade
-
-After installation, the tool lives here:
-
-```text
-/root/bt_gdrive_tool/
-```
-
-If a BT Panel update or Google Drive plugin update overwrites the patch, run:
-
-```bash
-sudo bash /root/bt_gdrive_tool/repair.sh
-```
-
-The configured folder ID is stored locally in:
-
-```text
-/root/bt_gdrive_tool/config.env
-```
-
-with mode `600` permissions.
-
-## Optional fallback server name
-
-If a server cannot reach the public-IP lookup endpoint, provide a fallback name during installation:
-
-```bash
-sudo bash install.sh FOLDER_ID_HERE us-vps-01
-```
-
-The normal order is:
-
-1. current public IPv4;
-2. fallback name;
-3. hostname.
-
-## Diagnostics
-
-Run:
-
-```bash
-sudo bash /root/bt_gdrive_tool/diagnose.sh
-```
-
-It creates a diagnostic TXT under `/root/bt_gdrive_tool/` and prints it to the terminal.
-
-The diagnostic output intentionally redacts the Google Drive folder ID and does not read or print:
-
-- `credentials.json` contents;
-- OAuth access tokens;
-- refresh tokens;
-- Google client secrets;
-- website/database backup contents.
-
-When opening an issue, attach the diagnostic TXT rather than uploading your entire plugin directory.
-
-## Rollback
-
-Each repair creates a timestamped snapshot under:
-
-```text
-/root/bt_gdrive_tool/backups/
-```
-
-To restore the newest snapshot:
-
-```bash
-sudo bash /root/bt_gdrive_tool/uninstall.sh
-```
-
-Note: this restores the latest pre-repair copies of the two modified Python files. It does not uninstall the official Google Drive plugin.
-
-## Security notes
-
-Never commit or upload these files:
+不要把下面这些文件上传到 GitHub、论坛或公开网盘：
 
 ```text
 credentials.json
 config.conf
 token.json
 gdrive_token.json
-*.log
 /root/bt_gdrive_tool/config.env
+*.log
 ```
 
-See [SECURITY.md](SECURITY.md).
+详细见 [SECURITY.md](SECURITY.md)。
 
-## How it works
+## 更多中文文档
 
-See [docs/HOW_IT_WORKS.md](docs/HOW_IT_WORKS.md).
-
-## Upgrade recovery
-
-See [docs/UPGRADE_RECOVERY.md](docs/UPGRADE_RECOVERY.md).
+- [中文完整说明](README.zh-CN.md)
+- [中文安装指南](docs/INSTALL.zh-CN.md)
+- [中文 FAQ](docs/FAQ.zh-CN.md)
+- [工作原理](docs/HOW_IT_WORKS.md)
+- [升级恢复](docs/UPGRADE_RECOVERY.md)
+- [兼容性](COMPATIBILITY.md)
+- [安全说明](SECURITY.md)
 
 ## License
 
-The patch scripts and documentation in this repository are released under the MIT License. Third-party software modified at runtime remains under its own license and copyright.
+本仓库自行编写的补丁脚本与文档采用 MIT License。运行时被修改的第三方软件仍遵循其原有版权和许可证。
