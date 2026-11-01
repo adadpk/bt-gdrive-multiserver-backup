@@ -41,7 +41,6 @@ else
   exit 2
 fi
 
-# Legacy positional fallback name from v0.1.x.
 if [ -n "${1:-}" ] && [[ "${1:-}" != --* ]]; then
   SERVER_NAME="$1"
   shift
@@ -88,7 +87,7 @@ fi
 
 mkdir -p "$TOOL_DIR" "$TOOL_DIR/logs" "$TOOL_DIR/backups"
 chmod 700 "$TOOL_DIR" "$TOOL_DIR/logs" "$TOOL_DIR/backups"
-for f in repair.sh diagnose.sh uninstall.sh configure-root.sh configure-server-id.sh; do
+for f in repair.sh diagnose.sh uninstall.sh configure-root.sh configure-server-id.sh upgrade.sh; do
   cp -a "$SCRIPT_DIR/$f" "$TOOL_DIR/$f"
 done
 
