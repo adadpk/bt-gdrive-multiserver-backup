@@ -2,7 +2,7 @@
 
 Unofficial multi-server path patch for the **BT Panel / aaPanel Google Drive backup plugin 2.5**.
 
-It fixes a practical problem when several servers back up into the same Google Drive account: the stock plugin can create or reuse generic `bt_backup` folders and may resolve same-named folders without constraining the parent folder. This project changes the layout to:
+It helps multiple servers share one Google Drive backup root while keeping each server isolated in its own subfolder.
 
 ```text
 BT-Backup/
@@ -10,16 +10,42 @@ BT-Backup/
 │   ├── web/
 │   ├── db/
 │   └── path/
-├── 203.0.113.11/
+├── web-prod-01/
 │   ├── web/
 │   ├── db/
 │   └── path/
 └── ...
 ```
 
-The server subfolder defaults to the current public IPv4 address. If public-IP detection fails, an optional fallback name and then the hostname are used.
-
 > This is an **unofficial community patch**. It is not affiliated with, endorsed by, or distributed by BT.cn, aaPanel, Google, or Google Drive.
+
+## v0.2.0: selectable server ID modes
+
+Three modes are supported:
+
+| Mode | Folder name source | Best for |
+|---|---|---|
+| `ip` | current public IPv4 | fixed-IP VPS; default |
+| `name` | custom fixed name | changing IPs, migrations, stable naming |
+| `hostname` | system hostname | managed hostname environments |
+
+Examples:
+
+```bash
+sudo bash install.sh FOLDER_ID --server-id ip
+sudo bash install.sh FOLDER_ID --server-id name --name web-prod-01
+sudo bash install.sh FOLDER_ID --server-id hostname
+```
+
+Switch an already installed server without reinstalling:
+
+```bash
+sudo bash /root/bt_gdrive_tool/configure-server-id.sh ip
+sudo bash /root/bt_gdrive_tool/configure-server-id.sh name web-prod-01
+sudo bash /root/bt_gdrive_tool/configure-server-id.sh hostname
+```
+
+Changing the mode only affects future backups. Existing Google Drive folders are not moved automatically.
 
 ## What this project changes
 
@@ -36,12 +62,12 @@ Main changes:
 
 - use one shared Google Drive root folder;
 - create a separate subfolder per server;
-- use public IPv4 as the default server identifier;
+- selectable server identifiers (`ip`, `name`, `hostname`);
 - make Google Drive folder lookup parent-aware to avoid same-name folder collisions;
 - preserve `web`, `db`, and `path` subdirectories;
 - back up modified files before every repair;
 - stop and roll back when the expected code structure is not found;
-- include a redacted diagnostic script for upgrade troubleshooting.
+- include privacy-redacted diagnostics.
 
 ## Compatibility
 
@@ -52,65 +78,61 @@ Verified design target:
 
 A future panel/plugin update may change the Python structure. In that case the repair script is designed to stop instead of blindly replacing unrelated code.
 
-## Recommended setup
+## First server
 
-### A. First server: let the plugin create `BT-Backup`
-
-This is the safest route when the Google Drive plugin uses the `drive.file` OAuth scope, because a folder manually created in the Drive web UI may not always be visible to the app.
-
-Clone/download this repository, then run:
+Clone/download this repository, then run bootstrap mode:
 
 ```bash
+git clone https://github.com/adadpk/bt-gdrive-multiserver-backup.git
+cd bt-gdrive-multiserver-backup
 sudo bash install.sh --bootstrap
 ```
 
-Run **one small backup** from BT Panel. A new folder should appear:
+You can also bootstrap directly with a fixed server name:
 
-```text
-BT-Backup/<this-server-public-ip>/...
+```bash
+sudo bash install.sh --bootstrap --server-id name --name web-prod-01
 ```
 
-Open `BT-Backup` in Google Drive and copy the folder ID from the URL:
-
-```text
-https://drive.google.com/drive/folders/FOLDER_ID_HERE
-```
-
-Then configure that shared root on the first server:
+Run one small backup from BT Panel. Open the newly created `BT-Backup` folder in Google Drive and copy its folder ID from the URL, then configure it:
 
 ```bash
 sudo bash /root/bt_gdrive_tool/configure-root.sh FOLDER_ID_HERE
 ```
 
-### B. Additional servers
+## Additional servers
 
-Authorize the Google Drive 2.5 plugin with the **same Google account**, then run:
+Authorize the Google Drive 2.5 plugin with the **same Google account**, then run one of:
 
 ```bash
 sudo bash install.sh FOLDER_ID_HERE
+sudo bash install.sh FOLDER_ID_HERE --server-id name --name db-prod-01
+sudo bash install.sh FOLDER_ID_HERE --server-id hostname
 ```
 
-Every server uses the same root folder ID, while its backup files go under its own public-IP subfolder.
+The legacy form remains supported:
+
+```bash
+sudo bash install.sh FOLDER_ID_HERE fallback-name
+```
+
+That means IP mode with a fallback name if public-IP detection fails.
 
 ## One-command repair after an upgrade
-
-After installation, the tool lives here:
-
-```text
-/root/bt_gdrive_tool/
-```
-
-If a BT Panel update or Google Drive plugin update overwrites the patch, run:
 
 ```bash
 sudo bash /root/bt_gdrive_tool/repair.sh
 ```
+
+The saved Folder ID and server-ID mode are reused automatically.
 
 ## Diagnostics
 
 ```bash
 sudo bash /root/bt_gdrive_tool/diagnose.sh
 ```
+
+Diagnostics report the active mode but redact the Folder ID, public IP value, and custom server name.
 
 ## Rollback
 
@@ -120,7 +142,7 @@ sudo bash /root/bt_gdrive_tool/uninstall.sh
 
 ## Security
 
-Never commit credentials, OAuth tokens, private folder IDs, or diagnostic logs containing private infrastructure details. See [SECURITY.md](SECURITY.md).
+Never commit credentials, OAuth tokens, private folder IDs, or runtime configuration. See [SECURITY.md](SECURITY.md).
 
 ## License
 
