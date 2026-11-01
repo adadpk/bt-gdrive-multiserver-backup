@@ -14,16 +14,73 @@ BT-Backup/
 │   ├── web/
 │   ├── db/
 │   └── path/
-├── 203.0.113.11/
+├── web-prod-01/
 │   ├── web/
 │   ├── db/
 │   └── path/
 └── ...
 ```
 
-默认使用每台服务器当前的 **公网 IPv4** 作为子目录名；如果公网 IP 获取失败，可以回退到安装时指定的名称，再回退到主机名。
+## v0.2.0：服务器目录命名可选
 
-> 本项目是社区非官方补丁，与宝塔、aaPanel、Google、Google Drive 无隶属或官方合作关系。
+现在支持 3 种服务器标识模式：
+
+| 模式 | 目录名来源 | 适合场景 |
+|---|---|---|
+| `ip` | 当前公网 IPv4 | 固定 IP VPS；默认模式 |
+| `name` | 自定义固定名称 | IP 会变化、迁移服务器、想长期保持目录不变 |
+| `hostname` | Linux 系统 hostname | 已有规范主机名管理 |
+
+### 1. 默认：按公网 IP
+
+```bash
+sudo bash install.sh FOLDER_ID --server-id ip
+```
+
+目录类似：
+
+```text
+BT-Backup/203.0.113.10/
+```
+
+如果公网 IP 改变，后续备份会进入新的 IP 目录，旧目录不会删除。
+
+### 2. 固定名称：推荐给 IP 可能变化的服务器
+
+```bash
+sudo bash install.sh FOLDER_ID --server-id name --name web-prod-01
+```
+
+无论服务器 IP 怎么变化，都会继续进入：
+
+```text
+BT-Backup/web-prod-01/
+```
+
+### 3. 使用系统 hostname
+
+```bash
+sudo bash install.sh FOLDER_ID --server-id hostname
+```
+
+### 已安装服务器直接切换
+
+不需要重装：
+
+```bash
+# 切回公网 IP
+sudo bash /root/bt_gdrive_tool/configure-server-id.sh ip
+
+# 改成固定名称
+sudo bash /root/bt_gdrive_tool/configure-server-id.sh name web-prod-01
+
+# 改成系统 hostname
+sudo bash /root/bt_gdrive_tool/configure-server-id.sh hostname
+```
+
+> 切换模式不会自动移动 Google Drive 里已有的历史备份，只会影响之后的新备份路径。
+
+---
 
 ## 解决什么问题
 
@@ -38,7 +95,7 @@ BT-Backup/
 本项目会：
 
 - 多台服务器共用一个 `BT-Backup` 总目录；
-- 每台服务器自动按公网 IP 分目录；
+- 每台服务器可按公网 IP、固定名称或 hostname 分目录；
 - 保留 `web / db / path` 分类；
 - 修复 Google Drive 文件夹查找时只按名字匹配、未限定父目录的问题；
 - 每次修补前自动备份原文件；
@@ -62,18 +119,11 @@ BT-Backup/
 
 ### 第一台服务器：让插件自己创建 BT-Backup
 
-这是最稳的方式。因为 Google Drive 插件常使用 `drive.file` 授权范围，网页手工创建的文件夹不一定能被插件访问。
-
-先克隆仓库：
+因为 Google Drive 插件常使用 `drive.file` 授权范围，网页手工创建的文件夹不一定能被插件访问，所以第一台推荐使用引导模式：
 
 ```bash
 git clone https://github.com/adadpk/bt-gdrive-multiserver-backup.git
 cd bt-gdrive-multiserver-backup
-```
-
-第一台执行：
-
-```bash
 sudo bash install.sh --bootstrap
 ```
 
@@ -86,7 +136,7 @@ sudo bash install.sh --bootstrap
 正常会在 Google Drive 自动出现：
 
 ```text
-BT-Backup/<当前服务器公网IP>/...
+BT-Backup/<当前服务器标识>/...
 ```
 
 进入 `BT-Backup`，从浏览器地址栏复制 Folder ID：
@@ -101,17 +151,34 @@ https://drive.google.com/drive/folders/FOLDER_ID
 sudo bash /root/bt_gdrive_tool/configure-root.sh FOLDER_ID
 ```
 
-### 其他服务器
-
-这些服务器先安装并授权同一个 Google Drive 账号，然后执行：
+第一台也可以在 bootstrap 时指定固定名称：
 
 ```bash
-git clone https://github.com/adadpk/bt-gdrive-multiserver-backup.git
-cd bt-gdrive-multiserver-backup
-sudo bash install.sh FOLDER_ID
+sudo bash install.sh --bootstrap --server-id name --name web-prod-01
 ```
 
-所有服务器使用相同的 Folder ID，但会自动进入各自的公网 IP 目录。
+### 其他服务器
+
+先安装并授权同一个 Google Drive 账号，然后根据需要选择一种模式：
+
+```bash
+# 默认：按公网 IP
+sudo bash install.sh FOLDER_ID
+
+# 固定名称
+sudo bash install.sh FOLDER_ID --server-id name --name db-prod-01
+
+# hostname
+sudo bash install.sh FOLDER_ID --server-id hostname
+```
+
+旧版命令仍兼容：
+
+```bash
+sudo bash install.sh FOLDER_ID fallback-name
+```
+
+它等价于：**IP 模式 + 公网 IP 获取失败时使用 fallback-name**。
 
 ## 升级后失效怎么办
 
@@ -133,7 +200,7 @@ Google Drive 插件升级、修复或重装可能覆盖：
 sudo bash /root/bt_gdrive_tool/repair.sh
 ```
 
-不需要重新输入 Folder ID。
+Folder ID 和服务器标识模式都会继续读取之前保存的配置，不需要重新输入。
 
 ## 诊断
 
@@ -143,14 +210,16 @@ sudo bash /root/bt_gdrive_tool/repair.sh
 sudo bash /root/bt_gdrive_tool/diagnose.sh
 ```
 
-诊断脚本不会读取或输出：
+诊断脚本会显示当前服务器标识模式，但不会输出：
 
 - `credentials.json` 内容；
 - OAuth access token；
 - refresh token；
 - Google Client Secret；
 - 网站或数据库备份内容；
-- Folder ID 明文。
+- Folder ID 明文；
+- 公网 IP 明文；
+- 自定义服务器名称明文。
 
 提交 Issue 时建议只上传诊断 TXT。
 
@@ -177,6 +246,14 @@ sudo bash /root/bt_gdrive_tool/uninstall.sh
 ```text
 /www/server/panel/plugin/gdrive/gdrive_main.py
 /www/server/panel/class/CloudStoraUpload.py
+```
+
+并在插件目录写入运行时配置：
+
+```text
+root_folder_id.conf
+server_id_mode.conf
+server_name.conf
 ```
 
 仓库本身不会发布宝塔官方插件源码副本，也不会包含你的 Google Drive 授权信息。
